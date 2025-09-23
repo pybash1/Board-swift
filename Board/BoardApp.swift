@@ -10,8 +10,13 @@ import SwiftUI
 @main
 struct BoardApp: App {
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        MenuBarExtra("Board", systemImage: "clipboard") {
+            MenuView()
+        }
+        .menuBarExtraStyle(.menu)
+        
+        Settings {
+            SettingsView()
         }
     }
 }
