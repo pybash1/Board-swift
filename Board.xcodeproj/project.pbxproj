@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		BA172DD22E8310BC00702D9E /* Crypto in Frameworks */ = {isa = PBXBuildFile; productRef = BA172D682E830B0200702D9E /* Crypto */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		BA172D582E830A5600702D9E /* Board.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Board.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BA172DD22E8310BC00702D9E /* Crypto in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = Board;
 			packageProductDependencies = (
+				BA172D682E830B0200702D9E /* Crypto */,
 			);
 			productName = Board;
 			productReference = BA172D582E830A5600702D9E /* Board.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = BA172D4F2E830A5600702D9E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				BA172D662E830B0000702D9E /* XCRemoteSwiftPackageReference "swift-crypto" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BA172D592E830A5600702D9E /* Products */;
 			projectDirPath = "";
@@ -351,6 +360,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		BA172D662E830B0000702D9E /* XCRemoteSwiftPackageReference "swift-crypto" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-crypto";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BA172D682E830B0200702D9E /* Crypto */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BA172D662E830B0000702D9E /* XCRemoteSwiftPackageReference "swift-crypto" */;
+			productName = Crypto;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = BA172D502E830A5600702D9E /* Project object */;
 }

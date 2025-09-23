@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import Foundation
+import CryptoKit
 
 struct SettingsView: View {
     @State private var hasAccount = false
@@ -13,6 +15,10 @@ struct SettingsView: View {
     @State private var deviceFingerprint = ""
     @State private var showingLinkDevice = false
     @State private var masterKeyInput = ""
+    @State private var isLoading = false
+    @State private var errorMessage = ""
+    
+    private let apiClient = APIClient()
     
     var body: some View {
         VStack(spacing: 20) {
@@ -30,7 +36,7 @@ struct SettingsView: View {
                         
                         HStack {
                             Text("Account Hash:")
-                            Text(accountHash.isEmpty ? "Loading..." : accountHash)
+                            Text(accountHash.isEmpty ? "Loading..." : String(accountHash.prefix(16)) + "...")
                                 .foregroundColor(.secondary)
                                 .font(.monospaced(.body)())
                         }
@@ -56,10 +62,29 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
                         
                         Button("View Connected Devices") {
-                            // TODO: Show connected devices
+                            Task {
+                                await fetchConnectedDevices()
+                }
+                
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle())
+                }
+                
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
                         }
                         .buttonStyle(.bordered)
                     }
+                }
+                
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .font(.caption)
                 }
             } else {
                 // Onboarding view
@@ -69,17 +94,39 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 400, height: hasAccount ? 300 : 250)
         .onAppear {
-            checkForExistingAccount()
+            Task {
+                await checkForExistingAccount()
+            }
         }
         .sheet(isPresented: $showingLinkDevice) {
             LinkDeviceView()
         }
     }
     
-    private func checkForExistingAccount() {
-        // TODO: Check Keychain for existing account
-        // For now, assume no account
-        hasAccount = false
+    private func checkForExistingAccount() async {
+        do {
+            if KeychainService.isDeviceSetup() {
+                accountHash = try KeychainService.retrieveAccountHash()
+                deviceFingerprint = try KeychainService.retrieveDeviceCode()
+                hasAccount = true
+            } else {
+                hasAccount = false
+            }
+        } catch {
+            print("Error checking account: \(error)")
+            hasAccount = false
+            errorMessage = "Error loading account information"
+        }
+    }
+    
+    private func fetchConnectedDevices() async {
+        do {
+            let accountHashString = try KeychainService.retrieveAccountHash()
+            let deviceKeys = try await apiClient.fetchKeys(for: accountHashString)
+            print("Found \(deviceKeys.keys.count) connected devices")
+        } catch {
+            errorMessage = "Failed to fetch connected devices: \(error.localizedDescription)"
+        }
     }
 }
 
@@ -87,6 +134,10 @@ struct OnboardingView: View {
     @Binding var hasAccount: Bool
     @State private var showingLinkInput = false
     @State private var masterKeyInput = ""
+    @State private var isLoading = false
+    @State private var errorMessage = ""
+    
+    private let apiClient = APIClient()
     
     var body: some View {
         VStack(spacing: 20) {
@@ -101,16 +152,32 @@ struct OnboardingView: View {
             
             VStack(spacing: 12) {
                 Button("Create New Account") {
-                    createNewAccount()
+                    Task {
+                        await createNewAccount()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(isLoading)
                 
                 Button("Link Existing Account") {
                     showingLinkInput = true
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                .disabled(isLoading)
+            }
+            
+            if isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+            }
+            
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
             }
         }
         .sheet(isPresented: $showingLinkInput) {
@@ -133,10 +200,12 @@ struct OnboardingView: View {
                     .buttonStyle(.bordered)
                     
                     Button("Link") {
-                        linkExistingAccount()
+                        Task {
+                            await linkExistingAccount()
+                        }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(masterKeyInput.isEmpty)
+                    .disabled(masterKeyInput.isEmpty || isLoading)
                 }
             }
             .padding(20)
@@ -144,23 +213,58 @@ struct OnboardingView: View {
         }
     }
     
-    private func createNewAccount() {
-        // TODO: Generate new master key and device keys
-        print("Creating new account...")
-        hasAccount = true
+    private func createNewAccount() async {
+        isLoading = true
+        errorMessage = ""
+        
+        do {
+            let _ = try CryptoService.setupNewDevice()
+            try await apiClient.registerDevice()
+            
+            hasAccount = true
+        } catch {
+            print("Error creating account: \(error)")
+            errorMessage = "Failed to create account: \(error.localizedDescription)"
+        }
+        
+        isLoading = false
     }
     
-    private func linkExistingAccount() {
-        // TODO: Import master key and generate device keys
-        print("Linking existing account with key: \(masterKeyInput)")
-        showingLinkInput = false
-        masterKeyInput = ""
-        hasAccount = true
+    private func linkExistingAccount() async {
+        isLoading = true
+        errorMessage = ""
+        
+        do {
+            guard let masterKeyData = Data(base64Encoded: masterKeyInput) else {
+                errorMessage = "Invalid master key format"
+                isLoading = false
+                return
+            }
+            
+            // Store the master key first
+            let masterKey = SymmetricKey(data: masterKeyData)
+            try KeychainService.storeAccountMasterKey(masterKey)
+            
+            // Generate account hash and setup device
+            let accountHash = try CryptoService.generateAccountHash(from: masterKey)
+            let _ = try CryptoService.linkExistingDevice(accountHash: accountHash)
+            try await apiClient.registerDevice()
+            
+            showingLinkInput = false
+            masterKeyInput = ""
+            hasAccount = true
+        } catch {
+            print("Error linking account: \(error)")
+            errorMessage = "Failed to link account: \(error.localizedDescription)"
+        }
+        
+        isLoading = false
     }
 }
 
 struct LinkDeviceView: View {
     @State private var masterKey = "Loading..."
+    @State private var errorMessage = ""
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
@@ -203,17 +307,30 @@ struct LinkDeviceView: View {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
+            
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+            }
         }
         .padding(20)
         .frame(width: 400, height: 350)
         .onAppear {
-            loadMasterKey()
+            Task {
+                await loadMasterKey()
+            }
         }
     }
     
-    private func loadMasterKey() {
-        // TODO: Load actual master key from Keychain
-        masterKey = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789=="
+    private func loadMasterKey() async {
+        do {
+            let masterKeySymmetric = try KeychainService.retrieveAccountMasterKey()
+            masterKey = masterKeySymmetric.withUnsafeBytes { Data($0) }.base64EncodedString()
+        } catch {
+            errorMessage = "Failed to load master key: \(error.localizedDescription)"
+            masterKey = "Error loading key"
+        }
     }
 }
 
