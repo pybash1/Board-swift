@@ -1,261 +1,164 @@
 import Foundation
+import Combine
 
-class APIClient {
-    enum APIError: Error {
-        case invalidURL
-        case noData
-        case decodingError(Error)
-        case serverError(String)
-        case networkError(Error)
-        case authenticationRequired
+class BoardAPIClient: ObservableObject {
+    private let baseURL: String
+    private let deviceCode: String
+    private let appPassword: String?
+    
+    init(baseURL: String = "https://board-api.pybash.xyz", deviceCode: String, appPassword: String? = nil) {
+        self.baseURL = baseURL
+        self.deviceCode = deviceCode
+        self.appPassword = appPassword
     }
     
-    private let baseURL = "http://127.0.0.1:8820"
-    private let session = URLSession.shared
-    
-    // MARK: - Data Models
-    
-    struct DeviceKey: Codable {
-        let publicKey: String
-        let deviceCode: String
-    }
-    
-    struct KeysResponse: Codable {
-        let keys: [DeviceKey]
-    }
-    
-    struct CreatePasteRequest: Codable {
-        let content: String
-        let encryptedFor: [String]? // Device codes
-    }
-    
-    struct CreatePasteResponse: Codable {
-        let id: String
-        let url: String
-    }
-    
-    struct PasteResponse: Codable {
-        let id: String
-        let content: String
-        let createdAt: String
-        let encryptedBy: String? // Device code of sender
-    }
-    
-    // MARK: - Request Helpers
-    
-    private func createRequest(url: URL, method: String = "GET") throws -> URLRequest {
+    private func createRequest(path: String, method: String = "GET") -> URLRequest {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            fatalError("Invalid URL")
+        }
+        
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.setValue(deviceCode, forHTTPHeaderField: "Device-Code")
         
-        // Add required headers
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Board/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
-        
-        // Add Device-Code header if available
-        if let deviceCode = try? KeychainService.retrieveDeviceCode() {
-            request.setValue(deviceCode, forHTTPHeaderField: "Device-Code")
+        if let password = appPassword {
+            request.setValue(password, forHTTPHeaderField: "App-Password")
         }
         
         return request
     }
     
-    private func performRequest<T: Codable>(_ request: URLRequest, responseType: T.Type) async throws -> T {
-        do {
-            let (data, response) = try await session.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw APIError.networkError(URLError(.badServerResponse))
-            }
-            
-            guard 200...299 ~= httpResponse.statusCode else {
-                if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorMessage = errorData["error"] as? String {
-                    throw APIError.serverError(errorMessage)
-                }
-                throw APIError.serverError("HTTP \(httpResponse.statusCode)")
-            }
-            
-            guard !data.isEmpty else {
-                throw APIError.noData
-            }
-            
-            do {
-                let decoder = JSONDecoder()
-                return try decoder.decode(responseType, from: data)
-            } catch {
-                throw APIError.decodingError(error)
-            }
-        } catch let error as APIError {
-            throw error
-        } catch {
-            throw APIError.networkError(error)
+    func generateDeviceCode() async throws -> String {
+        var request = createRequest(path: "/device", method: "POST")
+        
+        if let password = appPassword {
+            request.setValue(password, forHTTPHeaderField: "App-Password")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BoardAPIError.invalidResponse
+        }
+        
+        switch httpResponse.statusCode {
+        case 200:
+            return String(data: data, encoding: .utf8) ?? ""
+        case 401:
+            throw BoardAPIError.unauthorized
+        default:
+            throw BoardAPIError.serverError(httpResponse.statusCode)
         }
     }
     
-    // MARK: - Device Registration
-    
-    func registerDevice() async throws {
-        guard let url = URL(string: "\(baseURL)/keys") else {
-            throw APIError.invalidURL
+    func createPaste(content: String) async throws -> String {
+        var request = createRequest(path: "/", method: "PUT")
+        request.httpBody = content.data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BoardAPIError.invalidResponse
         }
         
-        // Get current device info
-        let (accountHash, deviceCode, publicKeyData) = try CryptoService.getCurrentDeviceInfo()
-        let publicKeyBase64 = publicKeyData.base64EncodedString()
-        
-        var request = try createRequest(url: url, method: "POST")
-        
-        let payload = [
-            "accountHash": accountHash,
-            "deviceCode": deviceCode,
-            "publicKey": publicKeyBase64
-        ]
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        
-        // For device registration, we expect a simple success response
-        let (_, response) = try await session.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              200...299 ~= httpResponse.statusCode else {
-            throw APIError.serverError("Failed to register device")
+        switch httpResponse.statusCode {
+        case 200:
+            return String(data: data, encoding: .utf8) ?? ""
+        case 400:
+            throw BoardAPIError.badRequest
+        case 401:
+            throw BoardAPIError.unauthorized
+        case 413:
+            throw BoardAPIError.payloadTooLarge
+        default:
+            throw BoardAPIError.serverError(httpResponse.statusCode)
         }
     }
     
-    // MARK: - Key Management
-    
-    func fetchKeys(for accountHash: String) async throws -> KeysResponse {
-        guard let url = URL(string: "\(baseURL)/keys/\(accountHash)") else {
-            throw APIError.invalidURL
+    func getAllPastes() async throws -> [String] {
+        let request = createRequest(path: "/all")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BoardAPIError.invalidResponse
         }
         
-        let request = try createRequest(url: url)
-        return try await performRequest(request, responseType: KeysResponse.self)
+        switch httpResponse.statusCode {
+        case 200:
+            return try JSONDecoder().decode([String].self, from: data)
+        case 400:
+            throw BoardAPIError.badRequest
+        case 401:
+            throw BoardAPIError.unauthorized
+        default:
+            throw BoardAPIError.serverError(httpResponse.statusCode)
+        }
     }
     
-    // MARK: - Paste Operations
-    
-    func createPaste(content: String, encryptedFor deviceCodes: [String]? = nil) async throws -> CreatePasteResponse {
-        guard let url = URL(string: "\(baseURL)/pastes/new") else {
-            throw APIError.invalidURL
+    func getPaste(id: String) async throws -> String {
+        let request = createRequest(path: "/\(id)")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BoardAPIError.invalidResponse
         }
         
-        var request = try createRequest(url: url, method: "POST")
-        
-        let payload = CreatePasteRequest(content: content, encryptedFor: deviceCodes)
-        let encoder = JSONEncoder()
-        request.httpBody = try encoder.encode(payload)
-        
-        return try await performRequest(request, responseType: CreatePasteResponse.self)
+        switch httpResponse.statusCode {
+        case 200:
+            return String(data: data, encoding: .utf8) ?? ""
+        case 400:
+            throw BoardAPIError.badRequest
+        case 401:
+            throw BoardAPIError.unauthorized
+        case 404:
+            throw BoardAPIError.notFound
+        default:
+            throw BoardAPIError.serverError(httpResponse.statusCode)
+        }
     }
     
-    func fetchPaste(id: String) async throws -> PasteResponse {
-        guard let url = URL(string: "\(baseURL)/\(id)") else {
-            throw APIError.invalidURL
+    func getAPIInfo() async throws -> APIInfo {
+        let request = createRequest(path: "/")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BoardAPIError.invalidResponse
         }
         
-        let request = try createRequest(url: url)
-        return try await performRequest(request, responseType: PasteResponse.self)
+        switch httpResponse.statusCode {
+        case 200:
+            return try JSONDecoder().decode(APIInfo.self, from: data)
+        default:
+            throw BoardAPIError.serverError(httpResponse.statusCode)
+        }
     }
+}
+
+enum BoardAPIError: Error, LocalizedError {
+    case invalidResponse
+    case badRequest
+    case unauthorized
+    case notFound
+    case payloadTooLarge
+    case serverError(Int)
     
-    // MARK: - High-Level Operations
-    
-    func createEncryptedPaste(content: String, for accountHash: String) async throws -> CreatePasteResponse {
-        // Fetch recipient keys
-        let keysResponse = try await fetchKeys(for: accountHash)
-        
-        var encryptedContent: [String: String] = [:]
-        
-        // Encrypt for each device
-        for deviceKey in keysResponse.keys {
-            // Skip our own device
-            if let ownDeviceCode = try? KeychainService.retrieveDeviceCode(),
-               deviceKey.deviceCode == ownDeviceCode {
-                continue
-            }
-            
-            // Convert base64 public key to Data
-            guard let publicKeyData = Data(base64Encoded: deviceKey.publicKey) else {
-                continue
-            }
-            
-            do {
-                let encryptedData = try CryptoService.encryptForRecipient(
-                    content: content,
-                    recipientPublicKey: publicKeyData
-                )
-                encryptedContent[deviceKey.deviceCode] = encryptedData.base64EncodedString()
-            } catch {
-                // Skip devices we can't encrypt for
-                continue
-            }
-        }
-        
-        // Create paste with encrypted content
-        let pasteContent = try JSONSerialization.data(withJSONObject: encryptedContent)
-        let pasteContentString = String(data: pasteContent, encoding: .utf8) ?? ""
-        
-        return try await createPaste(
-            content: pasteContentString,
-            encryptedFor: Array(encryptedContent.keys)
-        )
-    }
-    
-    func fetchAndDecryptPaste(id: String) async throws -> String {
-        let paste = try await fetchPaste(id: id)
-        
-        // Try to parse as encrypted content
-        guard let contentData = paste.content.data(using: .utf8),
-              let encryptedContent = try? JSONSerialization.jsonObject(with: contentData) as? [String: String] else {
-            // Return as plain text if not encrypted
-            return paste.content
-        }
-        
-        // Get our device code
-        guard let deviceCode = try? KeychainService.retrieveDeviceCode() else {
-            throw APIError.authenticationRequired
-        }
-        
-        // Find our encrypted content
-        guard let encryptedString = encryptedContent[deviceCode],
-              let encryptedData = Data(base64Encoded: encryptedString) else {
-            throw APIError.serverError("No content encrypted for this device")
-        }
-        
-        // Get sender's public key for decryption
-        guard let senderDeviceCode = paste.encryptedBy else {
-            throw APIError.serverError("No sender information")
-        }
-        
-        // Fetch sender's public key
-        let accountHash = try KeychainService.retrieveAccountHash()
-        let keysResponse = try await fetchKeys(for: accountHash)
-        
-        guard let senderKey = keysResponse.keys.first(where: { $0.deviceCode == senderDeviceCode }),
-              let senderPublicKeyData = Data(base64Encoded: senderKey.publicKey) else {
-            throw APIError.serverError("Sender's public key not found")
-        }
-        
-        // Decrypt content
-        return try CryptoService.decryptFromSender(
-            encryptedData: encryptedData,
-            senderPublicKey: senderPublicKeyData
-        )
-    }
-    
-    // MARK: - Convenience Methods
-    
-    func isServerReachable() async -> Bool {
-        guard let url = URL(string: "\(baseURL)/health") else {
-            return false
-        }
-        
-        do {
-            let request = try createRequest(url: url)
-            let (_, response) = try await session.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .badRequest:
+            return "Bad request - check device code"
+        case .unauthorized:
+            return "Unauthorized - check password or device code"
+        case .notFound:
+            return "Paste not found"
+        case .payloadTooLarge:
+            return "Paste too large"
+        case .serverError(let code):
+            return "Server error: \(code)"
         }
     }
 }

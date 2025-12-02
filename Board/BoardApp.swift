@@ -1,22 +1,23 @@
-//
-//  BoardApp.swift
-//  Board
-//
-//  Created by Ananjan Mitra on 23/09/25.
-//
-
 import SwiftUI
 
 @main
 struct BoardApp: App {
+    @StateObject private var viewModel = BoardViewModel()
+    
+    init() {
+        // Initially hide dock icon - only show when settings window is open
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+    
     var body: some Scene {
-        MenuBarExtra("Board", systemImage: "clipboard") {
-            MenuView()
+        MenuBarExtra("Board", image: "MenuBarIcon") {
+            MenuBarContentView()
+                .environmentObject(viewModel)
         }
-        .menuBarExtraStyle(.menu)
         
         Settings {
             SettingsView()
+                .environmentObject(viewModel)
         }
     }
 }

@@ -1,339 +1,358 @@
-//
-//  SettingsView.swift
-//  Board
-//
-//  Created by Ananjan Mitra on 23/09/25.
-//
-
 import SwiftUI
-import Foundation
-import CryptoKit
+import AppKit
 
 struct SettingsView: View {
-    @State private var hasAccount = false
-    @State private var accountHash = ""
-    @State private var deviceFingerprint = ""
-    @State private var showingLinkDevice = false
-    @State private var masterKeyInput = ""
-    @State private var isLoading = false
-    @State private var errorMessage = ""
+    @EnvironmentObject var viewModel: BoardViewModel
+    @Environment(\.dismiss) private var dismiss
     
-    private let apiClient = APIClient()
+    @State private var deviceCode: String = ""
+    @State private var passphrase: String = ""
+    @State private var serverURL: String = ""
+    @State private var appPassword: String = ""
+    @State private var isAppPasswordVisible = false
+    @State private var notificationsEnabled: Bool = true
+    @State private var pollingInterval: Double = 1.0
+    @State private var showingRegenerateAlert = false
+    @State private var showingDeviceCodeInput = false
+    @State private var newDeviceCode = ""
+    @State private var isPassphraseVisible = false
+    
+    init() {
+        // Initialize with default values - will be updated in onAppear
+    }
     
     var body: some View {
-        VStack(spacing: 20) {
-            if hasAccount {
-                // Main settings view for existing account
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("Board Settings")
-                        .font(.title2)
-                        .fontWeight(.bold)
+        NavigationStack {
+            Form {
+                Section("Device Configuration") {
+                    HStack {
+                        Text("Device Code")
+                        Spacer()
+                        Text(deviceCode)
+                            .foregroundColor(.secondary)
+                            .font(.system(.body, design: .monospaced))
+                    }
                     
-                    // Account info
+                    HStack {
+                        Button("Generate New Device Code") {
+                            showingRegenerateAlert = true
+                        }
+                        .foregroundColor(.blue)
+                        
+                        Button("Enter Existing Code") {
+                            showingDeviceCodeInput = true
+                        }
+                        .foregroundColor(.green)
+                    }
+                    
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Account Information")
-                            .font(.headline)
-                        
                         HStack {
-                            Text("Account Hash:")
-                            Text(accountHash.isEmpty ? "Loading..." : String(accountHash.prefix(16)) + "...")
-                                .foregroundColor(.secondary)
-                                .font(.monospaced(.body)())
+                            if isPassphraseVisible {
+                                TextField("Passphrase", text: $passphrase)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                SecureField("Passphrase", text: $passphrase)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            Button(action: {
+                                isPassphraseVisible.toggle()
+                            }) {
+                                Image(systemName: isPassphraseVisible ? "eye.slash" : "eye")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(isPassphraseVisible ? "Hide passphrase" : "Show passphrase")
                         }
-                        
+                        Text("Optional: Additional security for clipboard encryption")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Section("Server Configuration") {
+                    HStack {
+                        Text("Server URL")
+                        TextField("", text: $serverURL)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Device ID:")
-                            Text(deviceFingerprint.isEmpty ? "Loading..." : deviceFingerprint)
+                            Text("Server Password")
+                            
+                            if isAppPasswordVisible {
+                                TextField("", text: $appPassword)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                SecureField("", text: $appPassword)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            Button(action: {
+                                isAppPasswordVisible.toggle()
+                            }) {
+                                Image(systemName: isAppPasswordVisible ? "eye.slash" : "eye")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(isAppPasswordVisible ? "Hide password" : "Show password")
+                        }
+                        .disabled(serverURL == AppSettings.defaultServerURL)
+                        
+                        if serverURL != AppSettings.defaultServerURL {
+                            Text("Password for your custom server")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
-                                .font(.monospaced(.body)())
                         }
                     }
+                }
+                
+                Section("Preferences") {
+                    Toggle("Enable Notifications", isOn: $notificationsEnabled)
+                        .help("Show notifications when clipboard is synced or operations complete")
                     
-                    Divider()
-                    
-                    // Device management
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Device Management")
-                            .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Slider(value: $pollingInterval, in: 1.0...30.0, step: 0.5) {
+                            Text("Polling Interval")
+                        } minimumValueLabel: {
+                            Text("1s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } maximumValueLabel: {
+                            Text("30s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         
-                        Button("Link Another Device") {
-                            showingLinkDevice = true
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Button("View Connected Devices") {
-                            Task {
-                                await fetchConnectedDevices()
-                }
-                
-                if isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle())
-                }
-                
-                if !errorMessage.isEmpty {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-                        }
-                        .buttonStyle(.bordered)
+                        Text("How often to check for new clipboard content from other devices")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 
-                if !errorMessage.isEmpty {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-            } else {
-                // Onboarding view
-                OnboardingView(hasAccount: $hasAccount)
-            }
-        }
-        .padding(20)
-        .frame(width: 400, height: hasAccount ? 300 : 250)
-        .onAppear {
-            Task {
-                await checkForExistingAccount()
-            }
-        }
-        .sheet(isPresented: $showingLinkDevice) {
-            LinkDeviceView()
-        }
-    }
-    
-    private func checkForExistingAccount() async {
-        do {
-            if KeychainService.isDeviceSetup() {
-                accountHash = try KeychainService.retrieveAccountHash()
-                deviceFingerprint = try KeychainService.retrieveDeviceCode()
-                hasAccount = true
-            } else {
-                hasAccount = false
-            }
-        } catch {
-            print("Error checking account: \(error)")
-            hasAccount = false
-            errorMessage = "Error loading account information"
-        }
-    }
-    
-    private func fetchConnectedDevices() async {
-        do {
-            let accountHashString = try KeychainService.retrieveAccountHash()
-            let deviceKeys = try await apiClient.fetchKeys(for: accountHashString)
-            print("Found \(deviceKeys.keys.count) connected devices")
-        } catch {
-            errorMessage = "Failed to fetch connected devices: \(error.localizedDescription)"
-        }
-    }
-}
-
-struct OnboardingView: View {
-    @Binding var hasAccount: Bool
-    @State private var showingLinkInput = false
-    @State private var masterKeyInput = ""
-    @State private var isLoading = false
-    @State private var errorMessage = ""
-    
-    private let apiClient = APIClient()
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Welcome to Board")
-                .font(.title2)
-                .fontWeight(.bold)
-            
-            Text("Secure clipboard syncing across all your devices")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            VStack(spacing: 12) {
-                Button("Create New Account") {
-                    Task {
-                        await createNewAccount()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(isLoading)
-                
-                Button("Link Existing Account") {
-                    showingLinkInput = true
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(isLoading)
-            }
-            
-            if isLoading {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle())
-            }
-            
-            if !errorMessage.isEmpty {
-                Text(errorMessage)
-                    .foregroundColor(.red)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .sheet(isPresented: $showingLinkInput) {
-            VStack(spacing: 15) {
-                Text("Link Existing Account")
-                    .font(.headline)
-                
-                Text("Enter your account master key from another device:")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                TextField("Master Key", text: $masterKeyInput)
-                    .textFieldStyle(.roundedBorder)
-                
-                HStack {
-                    Button("Cancel") {
-                        showingLinkInput = false
-                        masterKeyInput = ""
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Button("Link") {
+                Section("API Information") {
+                    Button("Test Connection") {
                         Task {
-                            await linkExistingAccount()
+                            await testConnection()
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(masterKeyInput.isEmpty || isLoading)
+                    .disabled(viewModel.isLoading)
+                    
+                    if viewModel.isLoading {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Testing...")
+                        }
+                    }
+                    
+                    if let error = viewModel.errorMessage {
+                        Text(error)
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
                 }
             }
-            .padding(20)
-            .frame(width: 350, height: 200)
-        }
-    }
-    
-    private func createNewAccount() async {
-        isLoading = true
-        errorMessage = ""
-        
-        do {
-            let _ = try CryptoService.setupNewDevice()
-            try await apiClient.registerDevice()
+            .formStyle(.grouped)
+            .frame(minWidth: 450, minHeight: 400)
+            .navigationTitle("Settings")
             
-            hasAccount = true
-        } catch {
-            print("Error creating account: \(error)")
-            errorMessage = "Failed to create account: \(error.localizedDescription)"
-        }
-        
-        isLoading = false
-    }
-    
-    private func linkExistingAccount() async {
-        isLoading = true
-        errorMessage = ""
-        
-        do {
-            guard let masterKeyData = Data(base64Encoded: masterKeyInput) else {
-                errorMessage = "Invalid master key format"
-                isLoading = false
-                return
-            }
-            
-            // Store the master key first
-            let masterKey = SymmetricKey(data: masterKeyData)
-            try KeychainService.storeAccountMasterKey(masterKey)
-            
-            // Generate account hash and setup device
-            let accountHash = try CryptoService.generateAccountHash(from: masterKey)
-            let _ = try CryptoService.linkExistingDevice(accountHash: accountHash)
-            try await apiClient.registerDevice()
-            
-            showingLinkInput = false
-            masterKeyInput = ""
-            hasAccount = true
-        } catch {
-            print("Error linking account: \(error)")
-            errorMessage = "Failed to link account: \(error.localizedDescription)"
-        }
-        
-        isLoading = false
-    }
-}
-
-struct LinkDeviceView: View {
-    @State private var masterKey = "Loading..."
-    @State private var errorMessage = ""
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Link Another Device")
-                .font(.headline)
-            
-            Text("Scan this QR code or copy the key on your new device:")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            // TODO: Generate QR code
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: 200, height: 200)
-                .overlay(
-                    Text("QR Code\n(Coming Soon)")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                )
-            
-            VStack(spacing: 8) {
-                Text("Or copy this key:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            // Bottom button bar
+            HStack(spacing: 12) {
+                Spacer()
                 
-                Text(masterKey)
-                    .font(.monospaced(.caption)())
-                    .padding(8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(4)
-                    .onTapGesture {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(masterKey, forType: .string)
+                Button("Cancel") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("Save") {
+                    saveSettings()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+        }
+        .alert("Generate New Device Code", isPresented: $showingRegenerateAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Generate", role: .confirm) {
+                regenerateDeviceCode()
+            }
+        } message: {
+            Text("This will generate a new device code. You will lose access to all existing pastes from this device.")
+        }
+        .alert("Enter Device Code", isPresented: $showingDeviceCodeInput) {
+            TextField("Device Code", text: $newDeviceCode)
+                .autocorrectionDisabled()
+                .onChange(of: newDeviceCode) { _, newValue in
+                    let filtered = String(newValue.uppercased().prefix(8))
+                    if filtered != newValue {
+                        newDeviceCode = filtered
                     }
+                }
+            Button("Cancel", role: .cancel) {
+                newDeviceCode = ""
             }
-            
-            Button("Done") {
-                dismiss()
+            Button("Set Code", role: .confirm) {
+                setDeviceCode()
             }
-            .buttonStyle(.borderedProminent)
+            .disabled(newDeviceCode.count != 8)
+        } message: {
+            Text("Enter an 8-character device code from another device to link this device.")
+        }
+        .onAppear {
+            // Update state values when the view appears
+            deviceCode = viewModel.settings.deviceCode ?? ""
+            passphrase = viewModel.settings.passphrase ?? ""
+            serverURL = viewModel.settings.serverURL
+            appPassword = viewModel.settings.appPassword ?? ""
+            notificationsEnabled = viewModel.settings.notificationsEnabled
+            pollingInterval = viewModel.pollingInterval
             
-            if !errorMessage.isEmpty {
-                Text(errorMessage)
-                    .foregroundColor(.red)
-                    .font(.caption)
+            // Notify that settings window is now visible
+            viewModel.updateSettingsWindowVisibility(true)
+            
+            // Focus and bring the settings window to front with delay for window setup
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                focusSettingsWindow()
             }
         }
-        .padding(20)
-        .frame(width: 400, height: 350)
-        .onAppear {
-            Task {
-                await loadMasterKey()
+        .onDisappear {
+            // Notify that settings window is no longer visible
+            viewModel.updateSettingsWindowVisibility(false)
+        }
+    }
+    
+    private func focusSettingsWindow() {
+        // Activate the application first
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        
+        // Multiple strategies to find and focus the settings window
+        var settingsWindow: NSWindow?
+        
+        // Strategy 1: Look for window with "Settings" in title or identifier
+        for window in NSApplication.shared.windows {
+            if window.isVisible && 
+               (window.title.contains("Settings") || 
+                window.title.contains("Preferences") ||
+                window.identifier?.rawValue.contains("Settings") == true) {
+                settingsWindow = window
+                break
+            }
+        }
+        
+        // Strategy 2: Find the frontmost non-menubar window
+        if settingsWindow == nil {
+            for window in NSApplication.shared.windows {
+                if window.isVisible && 
+                   !window.isSheet &&
+                   window.level == .normal &&
+                   window.canBecomeKey {
+                    settingsWindow = window
+                    break
+                }
+            }
+        }
+        
+        // Strategy 3: Use key window as fallback
+        if settingsWindow == nil {
+            settingsWindow = NSApplication.shared.keyWindow
+        }
+        
+        // Apply aggressive focusing
+        if let window = settingsWindow {
+            // Use multiple window levels for reliable focusing
+            let originalLevel = window.level
+            
+            // Set to status level temporarily (higher than normal)
+            window.level = .statusBar
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            
+            // Also try collectionBehavior for better window management
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            
+            // Reset to floating level after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                window.level = .floating
+                window.makeKeyAndOrderFront(nil)
+            }
+            
+            // Finally reset to normal level
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                window.level = originalLevel
+                window.collectionBehavior = []
+            }
+        } else {
+            // Fallback: Try to find any window and force app activation
+            NSApplication.shared.unhide(nil)
+            NSApplication.shared.arrangeInFront(nil)
+        }
+    }
+    
+    private func saveSettings() {
+        var updatedSettings = viewModel.settings
+        let cleanedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        updatedSettings.serverURL = cleanedURL
+        
+        if cleanedURL == AppSettings.defaultServerURL {
+            // Use default password from bundle
+            updatedSettings.appPassword = Bundle.main.object(forInfoDictionaryKey: "API_PASSWORD") as? String
+        } else {
+            // Use user-provided password
+            updatedSettings.appPassword = appPassword.isEmpty ? nil : appPassword
+        }
+        
+        updatedSettings.updatePassphrase(passphrase.isEmpty ? nil : passphrase)
+        updatedSettings.notificationsEnabled = notificationsEnabled
+        updatedSettings.save()
+        viewModel.updateSettings(updatedSettings)
+        viewModel.setPollingInterval(pollingInterval)
+    }
+    
+    private func regenerateDeviceCode() {
+        Task {
+            await viewModel.generateDeviceCode()
+            if let newCode = viewModel.settings.deviceCode {
+                deviceCode = newCode
             }
         }
     }
     
-    private func loadMasterKey() async {
-        do {
-            let masterKeySymmetric = try KeychainService.retrieveAccountMasterKey()
-            masterKey = masterKeySymmetric.withUnsafeBytes { Data($0) }.base64EncodedString()
-        } catch {
-            errorMessage = "Failed to load master key: \(error.localizedDescription)"
-            masterKey = "Error loading key"
+    private func setDeviceCode() {
+        Task {
+            await viewModel.setDeviceCode(newDeviceCode)
+            if let updatedCode = viewModel.settings.deviceCode {
+                deviceCode = updatedCode
+            }
+            newDeviceCode = ""
         }
     }
-}
-
-#Preview {
-    SettingsView()
+    
+    private func testConnection() async {
+        viewModel.errorMessage = nil
+        
+        let tempClient = BoardAPIClient(
+            baseURL: viewModel.settings.serverURL,
+            deviceCode: deviceCode,
+            appPassword: viewModel.settings.appPassword
+        )
+        
+        do {
+            let apiInfo = try await tempClient.getAPIInfo()
+            await MainActor.run {
+                viewModel.errorMessage = "✅ Connected successfully to: \(apiInfo.message)"
+            }
+        } catch {
+            await MainActor.run {
+                viewModel.errorMessage = "❌ Connection failed: \(error.localizedDescription)"
+            }
+        }
+    }
 }
