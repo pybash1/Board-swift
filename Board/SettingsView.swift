@@ -76,6 +76,13 @@ struct SettingsView: View {
                         TextField("", text: $serverURL)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
+                            .onChange(of: serverURL) { oldValue, newValue in
+                                if oldValue == AppSettings.defaultServerURL && newValue != AppSettings.defaultServerURL {
+                                    appPassword = ""
+                                } else if newValue == AppSettings.defaultServerURL {
+                                    appPassword = Bundle.main.object(forInfoDictionaryKey: "API_PASSWORD") as? String ?? ""
+                                }
+                            }
                     }
                     
                     VStack(alignment: .leading, spacing: 8) {
